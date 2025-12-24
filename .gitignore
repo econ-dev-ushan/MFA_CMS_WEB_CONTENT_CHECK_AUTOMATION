@@ -5,5 +5,5 @@ venv/
 .env
 
 cms_storage_state.json
-missing_articles.csv
+missing_articles*
 *.log
