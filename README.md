@@ -93,6 +93,12 @@ Example (pages 1 to 3):
 
 ```bash
 python src/sync_missing_articles.py \
+  --start-page 1 \
+  --end-page 3 \
+```
+
+```bash
+python src/sync_missing_articles.py \
   --cms-base-url https://sample_cms_admin_base_url.net \
   --public-list-url https://mfa.gov.lk/en/category/media-releases/ \
   --start-page 1 \
