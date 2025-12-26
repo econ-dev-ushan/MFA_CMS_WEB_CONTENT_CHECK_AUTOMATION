@@ -34,13 +34,27 @@ def normalize_title(raw: str) -> str:
     Normalize a title to ensure consistent matching and CSV saving:
     - Decode HTML entities
     - Replace non-breaking spaces
-    - Collapse whitespace
-    - Strip wrapping quotes
+    - Strip leading/trailing whitespace
+    - Strip wrapping quote characters
+    - Collapse internal whitespace
     """
+    if raw is None:
+        return ""
+
     s = html.unescape(raw)
+
+    # Replace non-breaking space with normal space
     s = s.replace("\u00a0", " ")
+
+    # First trim outer whitespace
+    s = s.strip()
+
+    # Strip common quote characters from both ends
+    s = s.strip('\'"“”‘’„‟‹›«»')
+
+    # Collapse any internal repeated whitespace
     s = _whitespace_re.sub(" ", s).strip()
-    s = s.strip('\'"“”‘’')
+
     return s
 
 
@@ -172,6 +186,7 @@ async def cms_title_exists(page, cms_base_url: str, title: str) -> bool:
     links = page.locator("table.views-table tbody td.views-field-title a")
     count = await links.count()
     if count == 0:
+        print("    No title links in CMS table")
         return False
 
     wanted = clean.lower()
@@ -236,6 +251,9 @@ async def run_sync(
 
     already_missing = load_existing_titles(out_csv)
 
+    total_scanned = 0
+    total_missing = 0
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(storage_state=storage_state_path)
@@ -247,6 +265,8 @@ async def run_sync(
 
             if limit_per_page is not None:
                 public_items = public_items[:limit_per_page]
+
+            total_scanned += len(public_items)
 
             for item in public_items:
                 clean = normalize_title(item.title)
@@ -269,11 +289,14 @@ async def run_sync(
                         ),
                     )
                     already_missing.add(clean.lower())
+                    total_missing += 1
 
         await context.close()
         await browser.close()
 
     print("Sync complete")
+    print(f"Total public articles scanned: {total_scanned}")
+    print(f"Total missing (not found in CMS): {total_missing}")
 
 
 def main() -> None:
@@ -285,7 +308,10 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--init-auth", action="store_true")
     parser.add_argument("--cms-base-url", default=os.getenv("CMS_BASE_URL", "").strip())
-    parser.add_argument("--public-list-url", default=os.getenv("PUBLIC_LIST_URL", "https://mfa.gov.lk/en/category/media-releases/").strip())
+    parser.add_argument(
+        "--public-list-url",
+        default=os.getenv("PUBLIC_LIST_URL", "https://mfa.gov.lk/en/category/media-releases/").strip(),
+    )
     parser.add_argument("--storage-state", default="cms_storage_state.json")
     parser.add_argument("--out", default="missing_articles.csv")
     parser.add_argument("--start-page", type=int, default=1)
