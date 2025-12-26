@@ -1,5 +1,6 @@
 from dotenv import load_dotenv
 load_dotenv()
+
 import argparse
 import asyncio
 import csv
@@ -18,22 +19,39 @@ from playwright.async_api import async_playwright
 
 @dataclass(frozen=True)
 class PublicArticle:
+    """
+    Simple value object representing a public article on the website.
+    """
     title: str
     url: str
     date_text: str
 
 
+# Used to collapse multiple whitespace characters into a single space
 _whitespace_re = re.compile(r"\s+")
 
 
 def normalize_title(raw: str) -> str:
+    """
+    Normalize titles so that public site titles and CMS titles can be compared reliably.
+    - Unescapes HTML entities
+    - Replaces non-breaking spaces
+    - Collapses repeated whitespace
+    - Strips surrounding quote characters if present
+    """
     s = html.unescape(raw)
     s = s.replace("\u00a0", " ")
     s = _whitespace_re.sub(" ", s).strip()
+    # Strip common leading/trailing quotes that sometimes wrap titles
+    s = s.strip('\'"“”‘’')
     return s
 
 
 def public_page_url(base_list_url: str, page_num: int) -> str:
+    """
+    Build the URL for a given page number in the public listing.
+    Page 1 is treated as the base listing URL; subsequent pages use /page/N/.
+    """
     if page_num <= 1:
         return base_list_url if base_list_url.endswith("/") else base_list_url + "/"
     base = base_list_url if base_list_url.endswith("/") else base_list_url + "/"
@@ -41,6 +59,10 @@ def public_page_url(base_list_url: str, page_num: int) -> str:
 
 
 async def fetch_public_articles(base_list_url: str, page_num: int, timeout_s: float = 30.0) -> List[PublicArticle]:
+    """
+    Fetch and parse the public media-release listing page.
+    Extracts title, URL and date for each article found on the page.
+    """
     url = public_page_url(base_list_url, page_num)
     async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as client:
         r = await client.get(url)
@@ -71,6 +93,10 @@ async def fetch_public_articles(base_list_url: str, page_num: int, timeout_s: fl
 
 
 def load_existing_titles(csv_path: str) -> Set[str]:
+    """
+    Load already-recorded missing titles from a CSV file into a set (lowercased).
+    This prevents writing duplicate rows when the script is run multiple times.
+    """
     if not os.path.exists(csv_path):
         return set()
 
@@ -85,6 +111,10 @@ def load_existing_titles(csv_path: str) -> Set[str]:
 
 
 def append_missing(csv_path: str, row: Tuple[str, str, str, str]) -> None:
+    """
+    Append a new missing-article record to the CSV file.
+    Creates the file with a header row on first write.
+    """
     file_exists = os.path.exists(csv_path)
     with open(csv_path, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -94,11 +124,18 @@ def append_missing(csv_path: str, row: Tuple[str, str, str, str]) -> None:
 
 
 def build_cms_content_url(cms_base_url: str) -> str:
+    """
+    Build the CMS content listing URL from the configured CMS base URL.
+    """
     base = cms_base_url if cms_base_url.endswith("/") else cms_base_url + "/"
     return urljoin(base, "en/admin/content")
 
 
 async def cms_title_exists(page, cms_base_url: str, title: str) -> bool:
+    """
+    Check in the CMS (using Playwright) whether a given article title already exists.
+    Uses the admin content listing filtered by title, type=All, status=All, langcode=All.
+    """
     params = {
         "title": title,
         "type": "All",
@@ -136,6 +173,11 @@ async def cms_title_exists(page, cms_base_url: str, title: str) -> bool:
 
 
 async def init_auth_state(cms_base_url: str, storage_state_path: str) -> None:
+    """
+    Open a real browser window so the user can log into the CMS manually.
+    Once logged in, the browser storage state (cookies, etc.) is saved to a JSON file
+    so the automation can reuse the session in headless mode later.
+    """
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False)
         context = await browser.new_context()
@@ -150,6 +192,10 @@ async def init_auth_state(cms_base_url: str, storage_state_path: str) -> None:
 
 
 def timestamped_csv_name(path: str) -> str:
+    """
+    Append a timestamp to the base CSV file name.
+    Example: missing_articles.csv -> missing_articles_20251226_153045.csv
+    """
     base, ext = os.path.splitext(path)
     ext = ext if ext else ".csv"
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -165,6 +211,12 @@ async def run_sync(
     out_csv: str,
     limit_per_page: Optional[int] = None,
 ) -> None:
+    """
+    Main synchronization loop:
+    - Iterate over public listing pages
+    - For each article, check if it exists in the CMS
+    - If not found, append a record to the CSV file
+    """
     already_missing = load_existing_titles(out_csv)
 
     async with async_playwright() as p:
@@ -195,6 +247,11 @@ async def run_sync(
 
 
 def main() -> None:
+    """
+    Entry point for the CLI tool.
+    - --init-auth opens a browser to save session state
+    - otherwise runs the sync using stored session and writes a timestamped CSV
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--init-auth", action="store_true", help="Open browser to login and save session state")
     parser.add_argument("--cms-base-url", default=os.getenv("CMS_BASE_URL", "").strip())
@@ -220,6 +277,7 @@ def main() -> None:
     if not os.path.exists(args.storage_state):
         raise SystemExit(f"Storage state not found: {args.storage_state}. Run with --init-auth first.")
 
+    # Use a timestamped CSV name per run so each execution produces a separate report
     out_csv = timestamped_csv_name(args.out)
 
     asyncio.run(
